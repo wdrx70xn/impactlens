@@ -1,487 +1,339 @@
 name: Generate AI Impact Reports
-
-on:
-  # Trigger ONLY when user config files are modified in PRs (excludes test configs)
-  # Using pull_request_target to allow fork PRs to access secrets
-  # SECURITY: Workflow only reads config files and generates reports - no code execution from PR
+'on':
   pull_request_target:
-    branches: [master]
+    branches:
+    - master
     paths:
-      - "config/**/jira_report_config.yaml"
-      - "config/**/pr_report_config.yaml"
-      - "config/**/aggregation_config.yaml"
-      # Exclude test configs - they are tested in ci.yml
-      - "!config/test-*/**"
-
-  # Allow manual trigger with team selection
+    - config/**/jira_report_config.yaml
+    - config/**/pr_report_config.yaml
+    - config/**/aggregation_config.yaml
+    - '!config/test-*/**'
   workflow_dispatch:
     inputs:
       team:
-        description: "Team config directory (e.g., konfluxui)"
+        description: Team config directory (e.g., konfluxui)
         required: false
-        default: ""
+        default: ''
       report_type:
-        description: "Report type to generate"
+        description: Report type to generate
         required: true
         type: choice
         options:
-          - both
-          - jira
-          - pr
-        default: "both"
-
+        - both
+        - jira
+        - pr
+        default: both
 jobs:
-  # Job 1: 检测配置中是否需要访问内部 GitLab
   detect-gitlab:
     runs-on: ubuntu-latest
     outputs:
-      needs_internal_access: ${{ steps.check_gitlab.outputs.needs_internal_access }}
+      needs_internal_access: ${{ steps.check_gitlab.outputs.needs_internal_access
+        }}
       config_dir: ${{ steps.detect_config.outputs.config_dir }}
       is_aggregation: ${{ steps.detect_config.outputs.is_aggregation }}
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Detect config directory
-        id: detect_config
-        run: |
-          if [ -n "${{ github.event.inputs.team }}" ]; then
-            CONFIG_DIR="config/${{ github.event.inputs.team }}"
-          elif [ "${{ github.event_name }}" = "pull_request_target" ] || [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-            CHANGED_FILES=$(git diff --name-only $BASE_SHA $HEAD_SHA)
-
-            AGGREGATION_CONFIG=$(echo "$CHANGED_FILES" | grep -E '^config/.*/aggregation_config\.yaml$' | head -1)
-            if [ -n "$AGGREGATION_CONFIG" ]; then
-              CONFIG_DIR=$(dirname "$AGGREGATION_CONFIG")
-              echo "is_aggregation=true" >> $GITHUB_OUTPUT
-            else
-              CHANGED_CONFIG=$(echo "$CHANGED_FILES" | grep -E '^config/.*\.(yaml|yml)$' | head -1)
-              if [ -n "$CHANGED_CONFIG" ]; then
-                CONFIG_DIR=$(dirname "$CHANGED_CONFIG")
-              else
-                CONFIG_DIR="config"
-              fi
-              echo "is_aggregation=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            CONFIG_DIR="config"
-            echo "is_aggregation=false" >> $GITHUB_OUTPUT
-          fi
-
-          echo "config_dir=$CONFIG_DIR" >> $GITHUB_OUTPUT
-          echo "Detected config directory: $CONFIG_DIR"
-
-      - name: Check if GitLab internal access needed
-        id: check_gitlab
-        run: |
-          CONFIG_DIR="${{ steps.detect_config.outputs.config_dir }}"
-
-          # 检查配置文件中是否包含内部 GitLab URL
-          NEEDS_INTERNAL=false
-
-          # 检查所有相关的 pr_report_config.yaml
-          if [ -f "$CONFIG_DIR/aggregation_config.yaml" ]; then
-            # Aggregation mode: 检查所有子项目
-            echo "Checking aggregation mode configs..."
-            for project_dir in "$CONFIG_DIR"/*/; do
-              if [ -f "$project_dir/pr_report_config.yaml" ]; then
-                if grep -q "gitlab.cee.redhat.com" "$project_dir/pr_report_config.yaml"; then
-                  echo "Found internal GitLab in $project_dir/pr_report_config.yaml"
-                  NEEDS_INTERNAL=true
-                  break
-                fi
-              fi
-            done
-          else
-            # Single team mode
-            if [ -f "$CONFIG_DIR/pr_report_config.yaml" ]; then
-              if grep -q "gitlab.cee.redhat.com" "$CONFIG_DIR/pr_report_config.yaml"; then
-                echo "Found internal GitLab in $CONFIG_DIR/pr_report_config.yaml"
-                NEEDS_INTERNAL=true
-              fi
-            fi
-          fi
-
-          echo "needs_internal_access=$NEEDS_INTERNAL" >> $GITHUB_OUTPUT
-          echo "Needs internal GitLab access: $NEEDS_INTERNAL"
-
-  # Job 2: Generate reports (自动选择 runner)
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 0
+    - name: Detect config directory
+      id: detect_config
+      run: "if [ -n \"${{ github.event.inputs.team }}\" ]; then\n  CONFIG_DIR=\"config/${{\
+        \ github.event.inputs.team }}\"\nelif [ \"${{ github.event_name }}\" = \"\
+        pull_request_target\" ] || [ \"${{ github.event_name }}\" = \"pull_request\"\
+        \ ]; then\n  BASE_SHA=\"${{ github.event.pull_request.base.sha }}\"\n  HEAD_SHA=\"\
+        ${{ github.event.pull_request.head.sha }}\"\n  CHANGED_FILES=$(git diff --name-only\
+        \ $BASE_SHA $HEAD_SHA)\n\n  AGGREGATION_CONFIG=$(echo \"$CHANGED_FILES\" |\
+        \ grep -E '^config/.*/aggregation_config\\.yaml$' | head -1)\n  if [ -n \"\
+        $AGGREGATION_CONFIG\" ]; then\n    CONFIG_DIR=$(dirname \"$AGGREGATION_CONFIG\"\
+        )\n    echo \"is_aggregation=true\" >> $GITHUB_OUTPUT\n  else\n    CHANGED_CONFIG=$(echo\
+        \ \"$CHANGED_FILES\" | grep -E '^config/.*\\.(yaml|yml)$' | head -1)\n   \
+        \ if [ -n \"$CHANGED_CONFIG\" ]; then\n      CONFIG_DIR=$(dirname \"$CHANGED_CONFIG\"\
+        )\n    else\n      CONFIG_DIR=\"config\"\n    fi\n    echo \"is_aggregation=false\"\
+        \ >> $GITHUB_OUTPUT\n  fi\nelse\n  CONFIG_DIR=\"config\"\n  echo \"is_aggregation=false\"\
+        \ >> $GITHUB_OUTPUT\nfi\n\necho \"config_dir=$CONFIG_DIR\" >> $GITHUB_OUTPUT\n\
+        echo \"Detected config directory: $CONFIG_DIR\"\n"
+    - name: Check if GitLab internal access needed
+      id: check_gitlab
+      run: "CONFIG_DIR=\"${{ steps.detect_config.outputs.config_dir }}\"\n\n# \u68C0\
+        \u67E5\u914D\u7F6E\u6587\u4EF6\u4E2D\u662F\u5426\u5305\u542B\u5185\u90E8 GitLab\
+        \ URL\nNEEDS_INTERNAL=false\n\n# \u68C0\u67E5\u6240\u6709\u76F8\u5173\u7684\
+        \ pr_report_config.yaml\nif [ -f \"$CONFIG_DIR/aggregation_config.yaml\" ];\
+        \ then\n  # Aggregation mode: \u68C0\u67E5\u6240\u6709\u5B50\u9879\u76EE\n\
+        \  echo \"Checking aggregation mode configs...\"\n  for project_dir in \"\
+        $CONFIG_DIR\"/*/; do\n    if [ -f \"$project_dir/pr_report_config.yaml\" ];\
+        \ then\n      if grep -q \"gitlab.cee.redhat.com\" \"$project_dir/pr_report_config.yaml\"\
+        ; then\n        echo \"Found internal GitLab in $project_dir/pr_report_config.yaml\"\
+        \n        NEEDS_INTERNAL=true\n        break\n      fi\n    fi\n  done\nelse\n\
+        \  # Single team mode\n  if [ -f \"$CONFIG_DIR/pr_report_config.yaml\" ];\
+        \ then\n    if grep -q \"gitlab.cee.redhat.com\" \"$CONFIG_DIR/pr_report_config.yaml\"\
+        ; then\n      echo \"Found internal GitLab in $CONFIG_DIR/pr_report_config.yaml\"\
+        \n      NEEDS_INTERNAL=true\n    fi\n  fi\nfi\n\necho \"needs_internal_access=$NEEDS_INTERNAL\"\
+        \ >> $GITHUB_OUTPUT\necho \"Needs internal GitLab access: $NEEDS_INTERNAL\"\
+        \n"
   generate-reports:
     needs: detect-gitlab
-    runs-on: ${{ needs.detect-gitlab.outputs.needs_internal_access == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
       pull-requests: write
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          # For pull_request_target, we need to explicitly checkout the PR's head
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0 # Fetch full history for git diff
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 0
+    - name: Set PR context flag
+      id: pr_context
+      run: "# Set a flag to indicate if this is a PR event\nif [ \"${{ github.event_name\
+        \ }}\" = \"pull_request_target\" ] || [ \"${{ github.event_name }}\" = \"\
+        pull_request\" ]; then\n  echo \"is_pr=true\" >> $GITHUB_OUTPUT\nelse\n  echo\
+        \ \"is_pr=false\" >> $GITHUB_OUTPUT\nfi\n"
+    - name: Check if only user configs changed (no code changes)
+      if: steps.pr_context.outputs.is_pr == 'true'
+      id: check_files
+      run: "BASE_SHA=\"${{ github.event.pull_request.base.sha }}\"\nHEAD_SHA=\"${{\
+        \ github.event.pull_request.head.sha }}\"\n\nCHANGED_FILES=$(git diff --name-only\
+        \ $BASE_SHA $HEAD_SHA)\necho \"Changed files:\"\necho \"$CHANGED_FILES\"\n\
+        \n# Categorize changed files\n# 1. User config files (non-test configs)\n\
+        USER_CONFIG_CHANGES=$(echo \"$CHANGED_FILES\" | grep -E '^config/' | grep\
+        \ -v -E '^config/test-' | grep -E '\\.(yaml|yml)$' || true)\n\n# 2. Code changes\
+        \ (Python files, non-config, non-docs)\nCODE_CHANGES=$(echo \"$CHANGED_FILES\"\
+        \ | grep -vE '^(README\\.md|docs/.*|config/.*|\\.github/.*|LICENSE|\\.gitignore)'\
+        \ || true)\n\n# 3. CI/workflow changes\nCI_CHANGES=$(echo \"$CHANGED_FILES\"\
+        \ | grep -E '^\\.github/' || true)\n\necho \"\"\necho \"Categorization:\"\n\
+        echo \"  User configs: $(echo \"$USER_CONFIG_CHANGES\" | wc -l) files\"\n\
+        echo \"  Code changes: $(echo \"$CODE_CHANGES\" | wc -l) files\"\necho \"\
+        \  CI changes: $(echo \"$CI_CHANGES\" | wc -l) files\"\n\n# Decision logic:\n\
+        # - Skip if ANY code changes detected (even if config also changed)\n# - Skip\
+        \ if only CI/test configs changed\n# - Run ONLY if user configs changed AND\
+        \ no code changes\nif [ -n \"$CODE_CHANGES\" ]; then\n  echo \"skip=true\"\
+        \ >> $GITHUB_OUTPUT\n  echo \"\"\n  echo \"\u2717 Code changes detected -\
+        \ skipping report generation\"\n  echo \"  (Mixed config + code PRs should\
+        \ use CI workflow)\"\nelif [ -n \"$USER_CONFIG_CHANGES\" ]; then\n  echo \"\
+        skip=false\" >> $GITHUB_OUTPUT\n  echo \"\"\n  echo \"\u2713 User config-only\
+        \ PR - will generate reports\"\n  echo \"Changed configs:\"\n  echo \"$USER_CONFIG_CHANGES\"\
+        \nelse\n  echo \"skip=true\" >> $GITHUB_OUTPUT\n  echo \"\"\n  echo \"\u2717\
+        \ No user config changes - skipping report generation\"\nfi\n"
+    - name: Set up Python
+      if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false'
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Install dependencies
+      if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false'
+      run: 'python -m pip install --upgrade pip
 
-      - name: Set PR context flag
-        id: pr_context
-        run: |
-          # Set a flag to indicate if this is a PR event
-          if [ "${{ github.event_name }}" = "pull_request_target" ] || [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "is_pr=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_pr=false" >> $GITHUB_OUTPUT
-          fi
+        pip install -e .
 
-      - name: Check if only user configs changed (no code changes)
-        if: steps.pr_context.outputs.is_pr == 'true'
-        id: check_files
-        run: |
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+        '
+    - name: Restore GitHub PR cache
+      if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false'
+      uses: actions/cache@v4
+      with:
+        path: .cache/github
+        key: github-pr-cache-${{ hashFiles('config/**/pr_report_config.yaml') }}-${{
+          github.run_id }}
+        restore-keys: 'github-pr-cache-${{ hashFiles(''config/**/pr_report_config.yaml'')
+          }}-
 
-          CHANGED_FILES=$(git diff --name-only $BASE_SHA $HEAD_SHA)
-          echo "Changed files:"
-          echo "$CHANGED_FILES"
+          github-pr-cache-
 
-          # Categorize changed files
-          # 1. User config files (non-test configs)
-          USER_CONFIG_CHANGES=$(echo "$CHANGED_FILES" | grep -E '^config/' | grep -v -E '^config/test-' | grep -E '\.(yaml|yml)$' || true)
+          '
+    - name: Setup Google Credentials
+      if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false'
+      env:
+        GOOGLE_CREDENTIALS_BASE64: ${{ secrets.GOOGLE_CREDENTIALS_BASE64 }}
+      run: 'bash .github/scripts/setup-google-credentials.sh
 
-          # 2. Code changes (Python files, non-config, non-docs)
-          CODE_CHANGES=$(echo "$CHANGED_FILES" | grep -vE '^(README\.md|docs/.*|config/.*|\.github/.*|LICENSE|\.gitignore)' || true)
+        '
+    - name: Determine config path
+      if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false'
+      id: config
+      run: "if [ -n \"${{ github.event.inputs.team }}\" ]; then\n  # Manual trigger\
+        \ with team specified\n  CONFIG_DIR=\"config/${{ github.event.inputs.team\
+        \ }}\"\n  echo \"Using manually specified team: ${{ github.event.inputs.team\
+        \ }}\"\nelif [ \"${{ steps.pr_context.outputs.is_pr }}\" = \"true\" ]; then\n\
+        \  # PR trigger - detect which config changed\n  BASE_SHA=\"${{ github.event.pull_request.base.sha\
+        \ }}\"\n  HEAD_SHA=\"${{ github.event.pull_request.head.sha }}\"\n\n  echo\
+        \ \"Comparing $BASE_SHA...$HEAD_SHA\"\n  CHANGED_FILES=$(git diff --name-only\
+        \ $BASE_SHA $HEAD_SHA)\n  echo \"Changed files:\"\n  echo \"$CHANGED_FILES\"\
+        \n\n  # Check if aggregation_config.yaml changed (aggregation mode)\n  AGGREGATION_CONFIG=$(echo\
+        \ \"$CHANGED_FILES\" | grep -E '^config/.*/aggregation_config\\.yaml$' | head\
+        \ -1)\n\n  if [ -n \"$AGGREGATION_CONFIG\" ]; then\n    # Aggregation mode:\
+        \ use the directory containing aggregation_config.yaml\n    CONFIG_DIR=$(dirname\
+        \ \"$AGGREGATION_CONFIG\")\n    echo \"Detected aggregation config: $AGGREGATION_CONFIG\"\
+        \n    echo \"is_aggregation=true\" >> $GITHUB_OUTPUT\n  else\n    # Single\
+        \ team mode: extract config directory from changed files\n    # Handle nested\
+        \ directories like config/test-aggregation-ci/test-ci-team1/\n    CHANGED_CONFIG=$(echo\
+        \ \"$CHANGED_FILES\" | grep -E '^config/.*\\.(yaml|yml)$' | head -1)\n\n \
+        \   if [ -n \"$CHANGED_CONFIG\" ]; then\n      # Get the directory containing\
+        \ the config file\n      CONFIG_DIR=$(dirname \"$CHANGED_CONFIG\")\n     \
+        \ echo \"Detected config file: $CHANGED_CONFIG\"\n    else\n      # If no\
+        \ config file found, try to extract config directory\n      CONFIG_DIR=$(echo\
+        \ \"$CHANGED_FILES\" | grep -E '^config/[^/]+/' | head -1 | cut -d/ -f1,2)\n\
+        \    fi\n\n    # If no team-specific config changed, use root config\n   \
+        \ if [ -z \"$CONFIG_DIR\" ] || [ \"$CONFIG_DIR\" = \"config\" ]; then\n  \
+        \    CONFIG_DIR=\"config\"\n    fi\n    echo \"is_aggregation=false\" >> $GITHUB_OUTPUT\n\
+        \  fi\nelse\n  # Default to root config\n  CONFIG_DIR=\"config\"\n  echo \"\
+        is_aggregation=false\" >> $GITHUB_OUTPUT\nfi\n\necho \"config_dir=$CONFIG_DIR\"\
+        \ >> $GITHUB_OUTPUT\necho \"Using config directory: $CONFIG_DIR\"\n"
+    - name: Verify Setup
+      if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false'
+      env:
+        JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
+        JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        CHARTS_UPLOAD_TOKEN: ${{ secrets.CHARTS_UPLOAD_TOKEN }}
+        GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+        GIT_VERIFY_SSL: ${{ needs.detect-gitlab.outputs.needs_internal_access == 'true'
+          && 'false' || 'true' }}
+      run: "echo \"==========================================\"\necho \"Running setup\
+        \ verification...\"\necho \"==========================================\"\n\
+        \n# Run verify command\npython -m impactlens.cli verify\n\necho \"\"\necho\
+        \ \"==========================================\"\necho \"Configuration Summary:\"\
+        \necho \"==========================================\"\necho \"Config directory:\
+        \ ${{ steps.config.outputs.config_dir }}\"\necho \"Runner type: ${{ needs.detect-gitlab.outputs.needs_internal_access\
+        \ == 'true' && 'self-hosted (internal GitLab)' || 'GitHub-hosted' }}\"\necho\
+        \ \"Jira credentials: $([ -n \"$JIRA_USERNAME\" ] && echo '\u2713 Set' ||\
+        \ echo '\u2717 Not set')\"\necho \"GitHub token: $([ -n \"$GITHUB_TOKEN\"\
+        \ ] && echo '\u2713 Set' || echo '\u2717 Not set')\"\necho \"GitLab token:\
+        \ $([ -n \"$GITLAB_TOKEN\" ] && echo '\u2713 Set' || echo '\u2717 Not set')\"\
+        \necho \"Google credentials: $([ -n \"$GOOGLE_CREDENTIALS_FILE\" ] && echo\
+        \ '\u2713 Set' || echo '\u2717 Not set')\"\necho \"Google Sheets ID: $([ -n\
+        \ \"$GOOGLE_SPREADSHEET_ID\" ] && echo '\u2713 Set' || echo '\u2717 Not set')\"\
+        \necho \"SSL Verification: $GIT_VERIFY_SSL\"\necho \"==========================================\"\
+        \n"
+    - name: Generate Multi-Team Reports (Aggregation Mode)
+      if: (steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false') && steps.config.outputs.is_aggregation == 'true'
+      env:
+        JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
+        JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        CHARTS_UPLOAD_TOKEN: ${{ secrets.CHARTS_UPLOAD_TOKEN }}
+        GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        SMTP_USER: ${{ secrets.MAIL_APP_USER }}
+        SMTP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+        GITHUB_PR_URL: ${{ github.event.pull_request.html_url }}
+        GIT_VERIFY_SSL: ${{ needs.detect-gitlab.outputs.needs_internal_access == 'true'
+          && 'false' || 'true' }}
+      run: "CONFIG_DIR=\"${{ steps.config.outputs.config_dir }}\"\nREPORT_TYPE=\"\
+        ${{ github.event.inputs.report_type }}\"\n\necho \"==========================================\"\
+        \necho \"Multi-Team Aggregation Mode\"\necho \"==========================================\"\
+        \necho \"Config directory: $CONFIG_DIR\"\necho \"Using impactlens full command\
+        \ with auto-detection\"\necho \"\"\n\n# Get upload args using shared script\n\
+        UPLOAD_ARGS=$(.github/scripts/get-upload-args.sh)\n\nif [ -n \"$UPLOAD_ARGS\"\
+        \ ]; then\n  echo \"\u26A0\uFE0F  Google Sheets not configured, skipping upload\"\
+        \nelse\n  echo \"\u2713 Google Sheets configured, will upload reports\"\n\
+        fi\n\n# The 'full' command will auto-detect aggregation_config.yaml and:\n\
+        # 1. Process all sub-projects (Jira + PR reports)\n# 2. Aggregate reports\
+        \ across projects\n# 3. Generate AI analysis for aggregated reports\n# 4.\
+        \ Send deduplicated email notifications once at the end\nif [ -z \"$REPORT_TYPE\"\
+        \ ] || [ \"$REPORT_TYPE\" = \"both\" ]; then\n  echo \"Running: impactlens\
+        \ full --config \\\"$CONFIG_DIR\\\" $UPLOAD_ARGS --hide-individual-names --incremental\"\
+        \n  python -m impactlens.cli full \\\n    --config \"$CONFIG_DIR\" \\\n  \
+        \  $UPLOAD_ARGS \\\n    --hide-individual-names \\\n    --incremental\nelif\
+        \ [ \"$REPORT_TYPE\" = \"jira\" ]; then\n  echo \"Running: impactlens jira\
+        \ full --config \\\"$CONFIG_DIR\\\" $UPLOAD_ARGS --hide-individual-names\"\
+        \n  python -m impactlens.cli jira full \\\n    --config \"$CONFIG_DIR\" \\\
+        \n    $UPLOAD_ARGS \\\n    --hide-individual-names\nelif [ \"$REPORT_TYPE\"\
+        \ = \"pr\" ]; then\n  echo \"Running: impactlens pr full --config \\\"$CONFIG_DIR\\\
+        \" $UPLOAD_ARGS --incremental --hide-individual-names\"\n  python -m impactlens.cli\
+        \ pr full \\\n    --config \"$CONFIG_DIR\" \\\n    $UPLOAD_ARGS \\\n    --incremental\
+        \ \\\n    --hide-individual-names\nfi\n\necho \"\"\necho \"\u2713 Multi-team\
+        \ aggregation completed (includes AI analysis + emails)\"\n"
+    - name: Generate Single Team Reports
+      if: (steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false') && steps.config.outputs.is_aggregation != 'true'
+      env:
+        JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
+        JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        CHARTS_UPLOAD_TOKEN: ${{ secrets.CHARTS_UPLOAD_TOKEN }}
+        GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        SMTP_USER: ${{ secrets.MAIL_APP_USER }}
+        SMTP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+        GITHUB_PR_URL: ${{ github.event.pull_request.html_url }}
+        GIT_VERIFY_SSL: ${{ needs.detect-gitlab.outputs.needs_internal_access == 'true'
+          && 'false' || 'true' }}
+      run: "CONFIG_DIR=\"${{ steps.config.outputs.config_dir }}\"\nREPORT_TYPE=\"\
+        ${{ github.event.inputs.report_type }}\"\n\necho \"==========================================\"\
+        \necho \"Generating Single Team Reports\"\necho \"==========================================\"\
+        \necho \"Config directory: $CONFIG_DIR\"\necho \"Report type: ${REPORT_TYPE:-both}\"\
+        \necho \"\"\n\n# Get upload args using shared script\nUPLOAD_ARGS=$(.github/scripts/get-upload-args.sh)\n\
+        \nif [ -n \"$UPLOAD_ARGS\" ]; then\n  echo \"\u26A0\uFE0F  Google Sheets not\
+        \ configured, skipping upload\"\nelse\n  echo \"\u2713 Google Sheets configured,\
+        \ will upload reports\"\nfi\n\n# Use impactlens full command for single team\
+        \ (generates Jira + PR + sends emails once)\nif [ -z \"$REPORT_TYPE\" ] ||\
+        \ [ \"$REPORT_TYPE\" = \"both\" ]; then\n  echo \"Running: impactlens full\
+        \ --config \\\"$CONFIG_DIR\\\" $UPLOAD_ARGS --hide-individual-names --incremental\"\
+        \n  python -m impactlens.cli full \\\n    --config \"$CONFIG_DIR\" \\\n  \
+        \  $UPLOAD_ARGS \\\n    --hide-individual-names \\\n    --incremental\nelif\
+        \ [ \"$REPORT_TYPE\" = \"jira\" ]; then\n  CONFIG_PATH=\"$CONFIG_DIR/jira_report_config.yaml\"\
+        \n  if [ -f \"$CONFIG_PATH\" ]; then\n    echo \"Running: impactlens jira\
+        \ full --config \\\"$CONFIG_PATH\\\" $UPLOAD_ARGS --hide-individual-names\"\
+        \n    python -m impactlens.cli jira full \\\n      --config \"$CONFIG_PATH\"\
+        \ \\\n      $UPLOAD_ARGS \\\n      --hide-individual-names\n  else\n    echo\
+        \ \"Jira config not found at $CONFIG_PATH, skipping\"\n  fi\nelif [ \"$REPORT_TYPE\"\
+        \ = \"pr\" ]; then\n  CONFIG_PATH=\"$CONFIG_DIR/pr_report_config.yaml\"\n\
+        \  if [ -f \"$CONFIG_PATH\" ]; then\n    echo \"Running: impactlens pr full\
+        \ --config \\\"$CONFIG_PATH\\\" $UPLOAD_ARGS --incremental --hide-individual-names\"\
+        \n    python -m impactlens.cli pr full \\\n      --config \"$CONFIG_PATH\"\
+        \ \\\n      $UPLOAD_ARGS \\\n      --incremental \\\n      --hide-individual-names\n\
+        \  else\n    echo \"PR config not found at $CONFIG_PATH, skipping\"\n  fi\n\
+        fi\n\necho \"\"\necho \"\u2713 Single team report generation completed (includes\
+        \ AI analysis)\"\n"
+    - name: Upload Reports as Artifacts
+      if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false'
+      uses: actions/upload-artifact@v4
+      with:
+        name: impactlens-reports
+        path: 'reports/**/*.tsv
 
-          # 3. CI/workflow changes
-          CI_CHANGES=$(echo "$CHANGED_FILES" | grep -E '^\.github/' || true)
+          reports/**/*.json
 
-          echo ""
-          echo "Categorization:"
-          echo "  User configs: $(echo "$USER_CONFIG_CHANGES" | wc -l) files"
-          echo "  Code changes: $(echo "$CODE_CHANGES" | wc -l) files"
-          echo "  CI changes: $(echo "$CI_CHANGES" | wc -l) files"
+          reports/**/*.txt
 
-          # Decision logic:
-          # - Skip if ANY code changes detected (even if config also changed)
-          # - Skip if only CI/test configs changed
-          # - Run ONLY if user configs changed AND no code changes
-          if [ -n "$CODE_CHANGES" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo ""
-            echo "✗ Code changes detected - skipping report generation"
-            echo "  (Mixed config + code PRs should use CI workflow)"
-          elif [ -n "$USER_CONFIG_CHANGES" ]; then
-            echo "skip=false" >> $GITHUB_OUTPUT
-            echo ""
-            echo "✓ User config-only PR - will generate reports"
-            echo "Changed configs:"
-            echo "$USER_CONFIG_CHANGES"
-          else
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo ""
-            echo "✗ No user config changes - skipping report generation"
-          fi
+          reports/**/*.html
 
-      # Note: Config validation already ran in config-validation.yml
-      # This is a defensive check in case that workflow is bypassed
-
-      - name: Set up Python
-        if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false'
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-
-      - name: Restore GitHub PR cache
-        if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false'
-        uses: actions/cache@v4
-        with:
-          path: .cache/github
-          key: github-pr-cache-${{ hashFiles('config/**/pr_report_config.yaml') }}-${{ github.run_id }}
-          restore-keys: |
-            github-pr-cache-${{ hashFiles('config/**/pr_report_config.yaml') }}-
-            github-pr-cache-
-
-      - name: Setup Google Credentials
-        if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false'
-        env:
-          GOOGLE_CREDENTIALS_BASE64: ${{ secrets.GOOGLE_CREDENTIALS_BASE64 }}
-        run: |
-          bash .github/scripts/setup-google-credentials.sh
-
-      - name: Determine config path
-        if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false'
-        id: config
-        run: |
-          if [ -n "${{ github.event.inputs.team }}" ]; then
-            # Manual trigger with team specified
-            CONFIG_DIR="config/${{ github.event.inputs.team }}"
-            echo "Using manually specified team: ${{ github.event.inputs.team }}"
-          elif [ "${{ steps.pr_context.outputs.is_pr }}" = "true" ]; then
-            # PR trigger - detect which config changed
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-
-            echo "Comparing $BASE_SHA...$HEAD_SHA"
-            CHANGED_FILES=$(git diff --name-only $BASE_SHA $HEAD_SHA)
-            echo "Changed files:"
-            echo "$CHANGED_FILES"
-
-            # Check if aggregation_config.yaml changed (aggregation mode)
-            AGGREGATION_CONFIG=$(echo "$CHANGED_FILES" | grep -E '^config/.*/aggregation_config\.yaml$' | head -1)
-
-            if [ -n "$AGGREGATION_CONFIG" ]; then
-              # Aggregation mode: use the directory containing aggregation_config.yaml
-              CONFIG_DIR=$(dirname "$AGGREGATION_CONFIG")
-              echo "Detected aggregation config: $AGGREGATION_CONFIG"
-              echo "is_aggregation=true" >> $GITHUB_OUTPUT
-            else
-              # Single team mode: extract config directory from changed files
-              # Handle nested directories like config/test-aggregation-ci/test-ci-team1/
-              CHANGED_CONFIG=$(echo "$CHANGED_FILES" | grep -E '^config/.*\.(yaml|yml)$' | head -1)
-
-              if [ -n "$CHANGED_CONFIG" ]; then
-                # Get the directory containing the config file
-                CONFIG_DIR=$(dirname "$CHANGED_CONFIG")
-                echo "Detected config file: $CHANGED_CONFIG"
-              else
-                # If no config file found, try to extract config directory
-                CONFIG_DIR=$(echo "$CHANGED_FILES" | grep -E '^config/[^/]+/' | head -1 | cut -d/ -f1,2)
-              fi
-
-              # If no team-specific config changed, use root config
-              if [ -z "$CONFIG_DIR" ] || [ "$CONFIG_DIR" = "config" ]; then
-                CONFIG_DIR="config"
-              fi
-              echo "is_aggregation=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            # Default to root config
-            CONFIG_DIR="config"
-            echo "is_aggregation=false" >> $GITHUB_OUTPUT
-          fi
-
-          echo "config_dir=$CONFIG_DIR" >> $GITHUB_OUTPUT
-          echo "Using config directory: $CONFIG_DIR"
-
-      - name: Verify Setup
-        if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false'
-        env:
-          JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          CHARTS_UPLOAD_TOKEN: ${{ secrets.CHARTS_UPLOAD_TOKEN }}
-          GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-          GIT_VERIFY_SSL: ${{ needs.detect-gitlab.outputs.needs_internal_access == 'true' && 'false' || 'true' }}
-        run: |
-          echo "=========================================="
-          echo "Running setup verification..."
-          echo "=========================================="
-
-          # Run verify command
-          python -m impactlens.cli verify
-
-          echo ""
-          echo "=========================================="
-          echo "Configuration Summary:"
-          echo "=========================================="
-          echo "Config directory: ${{ steps.config.outputs.config_dir }}"
-          echo "Runner type: ${{ needs.detect-gitlab.outputs.needs_internal_access == 'true' && 'self-hosted (internal GitLab)' || 'GitHub-hosted' }}"
-          echo "Jira credentials: $([ -n "$JIRA_USERNAME" ] && echo '✓ Set' || echo '✗ Not set')"
-          echo "GitHub token: $([ -n "$GITHUB_TOKEN" ] && echo '✓ Set' || echo '✗ Not set')"
-          echo "GitLab token: $([ -n "$GITLAB_TOKEN" ] && echo '✓ Set' || echo '✗ Not set')"
-          echo "Google credentials: $([ -n "$GOOGLE_CREDENTIALS_FILE" ] && echo '✓ Set' || echo '✗ Not set')"
-          echo "Google Sheets ID: $([ -n "$GOOGLE_SPREADSHEET_ID" ] && echo '✓ Set' || echo '✗ Not set')"
-          echo "SSL Verification: $GIT_VERIFY_SSL"
-          echo "=========================================="
-
-      - name: Generate Multi-Team Reports (Aggregation Mode)
-        # NOTE: Uses unified 'impactlens full' command that auto-detects aggregation mode
-        # Handles: Individual reports → Aggregation → AI Analysis → Email (deduplicated)
-        if: (steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false') && steps.config.outputs.is_aggregation == 'true'
-        env:
-          JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          CHARTS_UPLOAD_TOKEN: ${{ secrets.CHARTS_UPLOAD_TOKEN }}
-          GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          SMTP_USER: ${{ secrets.MAIL_APP_USER }}
-          SMTP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
-          GITHUB_PR_URL: ${{ github.event.pull_request.html_url }}
-          GIT_VERIFY_SSL: ${{ needs.detect-gitlab.outputs.needs_internal_access == 'true' && 'false' || 'true' }}
-        run: |
-          CONFIG_DIR="${{ steps.config.outputs.config_dir }}"
-          REPORT_TYPE="${{ github.event.inputs.report_type }}"
-
-          echo "=========================================="
-          echo "Multi-Team Aggregation Mode"
-          echo "=========================================="
-          echo "Config directory: $CONFIG_DIR"
-          echo "Using impactlens full command with auto-detection"
-          echo ""
-
-          # Get upload args using shared script
-          UPLOAD_ARGS=$(.github/scripts/get-upload-args.sh)
-
-          if [ -n "$UPLOAD_ARGS" ]; then
-            echo "⚠️  Google Sheets not configured, skipping upload"
-          else
-            echo "✓ Google Sheets configured, will upload reports"
-          fi
-
-          # The 'full' command will auto-detect aggregation_config.yaml and:
-          # 1. Process all sub-projects (Jira + PR reports)
-          # 2. Aggregate reports across projects
-          # 3. Generate AI analysis for aggregated reports
-          # 4. Send deduplicated email notifications once at the end
-          if [ -z "$REPORT_TYPE" ] || [ "$REPORT_TYPE" = "both" ]; then
-            echo "Running: impactlens full --config \"$CONFIG_DIR\" $UPLOAD_ARGS --hide-individual-names --incremental"
-            python -m impactlens.cli full \
-              --config "$CONFIG_DIR" \
-              $UPLOAD_ARGS \
-              --hide-individual-names \
-              --incremental
-          elif [ "$REPORT_TYPE" = "jira" ]; then
-            echo "Running: impactlens jira full --config \"$CONFIG_DIR\" $UPLOAD_ARGS --hide-individual-names"
-            python -m impactlens.cli jira full \
-              --config "$CONFIG_DIR" \
-              $UPLOAD_ARGS \
-              --hide-individual-names
-          elif [ "$REPORT_TYPE" = "pr" ]; then
-            echo "Running: impactlens pr full --config \"$CONFIG_DIR\" $UPLOAD_ARGS --incremental --hide-individual-names"
-            python -m impactlens.cli pr full \
-              --config "$CONFIG_DIR" \
-              $UPLOAD_ARGS \
-              --incremental \
-              --hide-individual-names
-          fi
-
-          echo ""
-          echo "✓ Multi-team aggregation completed (includes AI analysis + emails)"
-
-      - name: Generate Single Team Reports
-        # NOTE: Uses unified 'impactlens full' command for single team
-        # Handles: Jira + PR reports → AI Analysis → Email (if enabled in config)
-        if: (steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false') && steps.config.outputs.is_aggregation != 'true'
-        env:
-          JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          CHARTS_UPLOAD_TOKEN: ${{ secrets.CHARTS_UPLOAD_TOKEN }}
-          GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          SMTP_USER: ${{ secrets.MAIL_APP_USER }}
-          SMTP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
-          GITHUB_PR_URL: ${{ github.event.pull_request.html_url }}
-          GIT_VERIFY_SSL: ${{ needs.detect-gitlab.outputs.needs_internal_access == 'true' && 'false' || 'true' }}
-        run: |
-          CONFIG_DIR="${{ steps.config.outputs.config_dir }}"
-          REPORT_TYPE="${{ github.event.inputs.report_type }}"
-
-          echo "=========================================="
-          echo "Generating Single Team Reports"
-          echo "=========================================="
-          echo "Config directory: $CONFIG_DIR"
-          echo "Report type: ${REPORT_TYPE:-both}"
-          echo ""
-
-          # Get upload args using shared script
-          UPLOAD_ARGS=$(.github/scripts/get-upload-args.sh)
-
-          if [ -n "$UPLOAD_ARGS" ]; then
-            echo "⚠️  Google Sheets not configured, skipping upload"
-          else
-            echo "✓ Google Sheets configured, will upload reports"
-          fi
-
-          # Use impactlens full command for single team (generates Jira + PR + sends emails once)
-          if [ -z "$REPORT_TYPE" ] || [ "$REPORT_TYPE" = "both" ]; then
-            echo "Running: impactlens full --config \"$CONFIG_DIR\" $UPLOAD_ARGS --hide-individual-names --incremental"
-            python -m impactlens.cli full \
-              --config "$CONFIG_DIR" \
-              $UPLOAD_ARGS \
-              --hide-individual-names \
-              --incremental
-          elif [ "$REPORT_TYPE" = "jira" ]; then
-            CONFIG_PATH="$CONFIG_DIR/jira_report_config.yaml"
-            if [ -f "$CONFIG_PATH" ]; then
-              echo "Running: impactlens jira full --config \"$CONFIG_PATH\" $UPLOAD_ARGS --hide-individual-names"
-              python -m impactlens.cli jira full \
-                --config "$CONFIG_PATH" \
-                $UPLOAD_ARGS \
-                --hide-individual-names
-            else
-              echo "Jira config not found at $CONFIG_PATH, skipping"
-            fi
-          elif [ "$REPORT_TYPE" = "pr" ]; then
-            CONFIG_PATH="$CONFIG_DIR/pr_report_config.yaml"
-            if [ -f "$CONFIG_PATH" ]; then
-              echo "Running: impactlens pr full --config \"$CONFIG_PATH\" $UPLOAD_ARGS --incremental --hide-individual-names"
-              python -m impactlens.cli pr full \
-                --config "$CONFIG_PATH" \
-                $UPLOAD_ARGS \
-                --incremental \
-                --hide-individual-names
-            else
-              echo "PR config not found at $CONFIG_PATH, skipping"
-            fi
-          fi
-
-          echo ""
-          echo "✓ Single team report generation completed (includes AI analysis)"
-
-      - name: Upload Reports as Artifacts
-        if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false'
-        uses: actions/upload-artifact@v4
-        with:
-          name: impactlens-reports
-          path: |
-            reports/**/*.tsv
-            reports/**/*.json
-            reports/**/*.txt
-            reports/**/*.html
-          retention-days: 30
-
-      - name: Report Statistics and PR Comment
-        if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr == 'false'
-        uses: ./.github/actions/report-comment
-        with:
-          reports_dir: "reports"
-          google_spreadsheet_id: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Comment on PR - Failure
-        if: steps.pr_context.outputs.is_pr == 'true' && failure() && steps.check_files.outputs.skip != 'true'
-        continue-on-error: true
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const logsUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-            let body = '## ❌ Report Generation Failed\n\n';
-            body += `🔍 **Action Required**: Please check the [workflow logs](${logsUrl}) for details.\n\n`;
-            body += '---\n\n';
-            body += '⚠️ **Important Notes**:\n';
-            body += '- ❌ **DO NOT MERGE** this PR - Config-only PRs are for report generation\n';
-            body += '- 🐛 Fix the issues reported in the logs\n';
-            body += '- 🔄 Push fixes to trigger a new workflow run\n';
-
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+          '
+        retention-days: 30
+    - name: Report Statistics and PR Comment
+      if: steps.check_files.outputs.skip != 'true' || steps.pr_context.outputs.is_pr
+        == 'false'
+      uses: ./.github/actions/report-comment
+      with:
+        reports_dir: reports
+        google_spreadsheet_id: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Comment on PR - Failure
+      if: steps.pr_context.outputs.is_pr == 'true' && failure() && steps.check_files.outputs.skip
+        != 'true'
+      continue-on-error: true
+      uses: actions/github-script@v7
+      with:
+        script: "const logsUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;\n\
+          \nlet body = '## \u274C Report Generation Failed\\n\\n';\nbody += `\U0001F50D\
+          \ **Action Required**: Please check the [workflow logs](${logsUrl}) for\
+          \ details.\\n\\n`;\nbody += '---\\n\\n';\nbody += '\u26A0\uFE0F **Important\
+          \ Notes**:\\n';\nbody += '- \u274C **DO NOT MERGE** this PR - Config-only\
+          \ PRs are for report generation\\n';\nbody += '- \U0001F41B Fix the issues\
+          \ reported in the logs\\n';\nbody += '- \U0001F504 Push fixes to trigger\
+          \ a new workflow run\\n';\n\nawait github.rest.issues.createComment({\n\
+          \  issue_number: context.issue.number,\n  owner: context.repo.owner,\n \
+          \ repo: context.repo.repo,\n  body: body\n});\n"
